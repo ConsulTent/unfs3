@@ -1,0 +1,17 @@
+[Unit]
+Description=UNFS3 user-space implementation of the NFSv3 server specification. https://unfs3.github.io
+Documentation=man:unfsd(8)
+After=network.target systemd-sysctl.service
+Conflicts=rescue.service rescue.target
+
+[Service]
+ExecStart=/usr/local/sbin/unfsd -d
+User=nobody
+Group=nfsnobody
+Type=simple
+Nice=-1
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+
