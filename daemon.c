@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <rpc/rpc.h>
 #include <rpc/pmap_clnt.h>
+#include <netconfig.h>
 
 #ifndef WIN32
 #include <sys/socket.h>
@@ -37,7 +38,7 @@
 #ifdef HAVE_RPC_SVC_SOC_H
 # include <rpc/svc_soc.h>
 #endif
-#ifdef HAVE_SVC_GETREQ_POLL
+#if defined(HAVE_SVC_GETREQ_POLL) && HAVE_DECL_SVC_POLLFD
 # include <sys/poll.h>
 #endif
 
@@ -70,12 +71,13 @@ char *opt_exports = "/etc/exports";
 int opt_cluster = FALSE;
 char *opt_cluster_path = "/";
 int opt_tcponly = FALSE;
+int opt_ipv4only = FALSE;
 unsigned int opt_nfs_port = NFS_PORT;	/* 0 means RPC_ANYSOCK */
 unsigned int opt_mount_port = NFS_PORT;
 int opt_singleuser = FALSE;
 int opt_brute_force = FALSE;
 int opt_testconfig = FALSE;
-struct in_addr opt_bind_addr;
+struct in6_addr opt_bind_addr;
 int opt_readable_executables = FALSE;
 char *opt_pid_file = NULL;
 
@@ -109,11 +111,33 @@ void logmsg(int prio, const char *fmt, ...)
 }
 
 /*
- * return remote address from svc_req structure
+ * return remote address from svc_req structure in IPv6 format
+ * 
+ * IPv4 addresses are returned in so-called IPv4-mapped IPv6 address format.
+ *
+ * For AF_INET6 addresses, remote_buf is not used and a pointer to 
+ *	a field of netbuf (provided by svc_req) is returned.
+ *
+ * For AF_INET addresses, the address is stored into the remote_buf
+ *	and its address is returned.
  */
-struct in_addr get_remote(struct svc_req *rqstp)
+const struct in6_addr *get_remote(struct svc_req *rqstp, struct in6_addr *remote_buf) 
 {
-    return (svc_getcaller(rqstp->rq_xprt))->sin_addr;
+    const struct sockaddr *saddr = (struct sockaddr *) svc_getrpccaller(rqstp->rq_xprt)->buf;
+    if (saddr->sa_family == AF_INET6) {
+	return &((struct sockaddr_in6 *) saddr)->sin6_addr;
+    } else if (saddr->sa_family == AF_INET) {
+	struct in_addr addr = ((struct sockaddr_in *) saddr)->sin_addr;
+
+	((uint32_t*)remote_buf)[0] = 0;
+	((uint32_t*)remote_buf)[1] = 0;
+	((uint32_t*)remote_buf)[2] = htonl(0xffff);
+	((uint32_t*)remote_buf)[3] = addr.s_addr;
+	return remote_buf;
+    } else {
+	logmsg(LOG_CRIT, "unable to determine remote address - unknown address family");
+	return NULL;
+    }
 }
 
 /*
@@ -121,7 +145,15 @@ struct in_addr get_remote(struct svc_req *rqstp)
  */
 short get_port(struct svc_req *rqstp)
 {
-    return (svc_getcaller(rqstp->rq_xprt))->sin_port;
+    const struct sockaddr *saddr = (struct sockaddr *) svc_getrpccaller(rqstp->rq_xprt)->buf;
+    if (saddr->sa_family == AF_INET6) {
+	return ((struct sockaddr_in6 *) saddr)->sin6_port;
+    } else if (saddr->sa_family == AF_INET) {
+	return ((struct sockaddr_in *) saddr)->sin_port;
+    } else {
+	logmsg(LOG_CRIT, "unable to determine remote port - unknown address family");
+	return 0;
+    }
 }
 
 /*
@@ -134,11 +166,7 @@ int get_socket_type(struct svc_req *rqstp)
 
     l = sizeof(v);
 
-#if HAVE_STRUCT___RPC_SVCXPRT_XP_FD == 1
     res = getsockopt(rqstp->rq_xprt->xp_fd, SOL_SOCKET, SO_TYPE, &v, &l);
-#else
-    res = getsockopt(rqstp->rq_xprt->xp_sock, SOL_SOCKET, SO_TYPE, &v, &l);
-#endif
 
     if (res < 0) {
 	logmsg(LOG_CRIT, "unable to determine socket type");
@@ -206,7 +234,7 @@ static void parse_options(int argc, char **argv)
 {
 
     int opt = 0;
-    char *optstring = "bcC:de:hl:m:n:prstTuwi:";
+    char *optstring = "bcC:de:hl:m:n:prstTuwi:4";
 
     while (opt != -1) {
 	opt = getopt(argc, argv, optstring);
@@ -253,6 +281,7 @@ static void parse_options(int argc, char **argv)
 		printf("\t-m <port>   port to use for MOUNT service\n");
 		printf
 		    ("\t-t          TCP only, do not listen on UDP ports\n");
+		printf("\t-4          use IPv4-only sockets\n");
 		printf("\t-p          do not register with the portmapper\n");
 		printf("\t-s          single user mode\n");
 		printf("\t-b          enable brute force file searching\n");
@@ -264,10 +293,18 @@ static void parse_options(int argc, char **argv)
 		exit(0);
 		break;
 	    case 'l':
-		opt_bind_addr.s_addr = inet_addr(optarg);
-		if (opt_bind_addr.s_addr == (unsigned) -1) {
-		    fprintf(stderr, "Invalid bind address\n");
-		    exit(1);
+		if (inet_pton(AF_INET6, optarg, &opt_bind_addr) != 1) {
+		    struct in_addr in4;
+
+		    if (inet_pton(AF_INET, optarg, &in4) != 1) {
+			fprintf(stderr, "Invalid bind address\n");
+			exit(1);
+		    }
+
+		    ((uint32_t*)&opt_bind_addr)[0] = 0;
+		    ((uint32_t*)&opt_bind_addr)[1] = 0;
+		    ((uint32_t*)&opt_bind_addr)[2] = htonl(0xffff);
+		    ((uint32_t*)&opt_bind_addr)[3] = in4.s_addr;
 		}
 		break;
 	    case 'm':
@@ -303,6 +340,9 @@ static void parse_options(int argc, char **argv)
 		break;
 	    case 't':
 		opt_tcponly = TRUE;
+		break;
+	    case '4':
+		opt_ipv4only = TRUE;
 		break;
 	    case 'T':
 		opt_testconfig = TRUE;
@@ -347,12 +387,12 @@ void daemon_exit(int error)
 #endif				       /* WIN32 */
 
     if (opt_portmapper) {
-	svc_unregister(MOUNTPROG, MOUNTVERS1);
-	svc_unregister(MOUNTPROG, MOUNTVERS3);
+	svc_unreg(MOUNTPROG, MOUNTVERS1);
+	svc_unreg(MOUNTPROG, MOUNTVERS3);
     }
 
     if (opt_portmapper) {
-	svc_unregister(NFS3_PROGRAM, NFS_V3);
+	svc_unreg(NFS3_PROGRAM, NFS_V3);
     }
 
     if (error == SIGSEGV)
@@ -654,6 +694,34 @@ static void mountprog_3(struct svc_req *rqstp, register SVCXPRT * transp)
     return;
 }
 
+static void register_service(SVCXPRT *transp, rpcprog_t prog, rpcvers_t vers,
+			     void (*dispatch)(struct svc_req *, SVCXPRT*),
+			     char *netid, char *logmsg) {
+    struct netconfig* nconf = NULL;
+    int free_nconf = FALSE;
+    if (netid != NULL) {
+	/* Returns a pointer to nconf corresponding to NETCONF */
+	if ((nconf = getnetconfigent(netid)) != NULL) {
+	    free_nconf = TRUE;
+	} else {
+	    fprintf(stderr, 
+		"Cannot get netconfig entry for %s while registering %s, "
+		"rpcbind entry will not be created.\n",
+		netid, logmsg);
+	}
+    }
+
+    /* If nconf is NULL, the service is not registered with the rpcbind service. */
+    if (!svc_reg(transp, prog, vers, dispatch, nconf)) {
+	fprintf(stderr, "unable to register %s.\n", logmsg);
+	daemon_exit(0);
+    }
+
+    if (free_nconf) {
+	freenetconfigent(nconf);
+    }
+}
+
 static void register_nfs_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 {
     if (opt_portmapper) {
@@ -669,6 +737,12 @@ static void register_nfs_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 		    "unable to register (NFS3_PROGRAM, NFS_V3, udp).");
 	    daemon_exit(0);
 	}
+
+	if (opt_portmapper && !opt_ipv4only) {
+	    /* Register NFS service for UDP6 */
+	    register_service(udptransp, NFS3_PROGRAM, NFS_V3, nfs3_program_3,
+		"udp6", "(NFS3_PROGRAM, NFS_V3, udp6)");
+	}
     }
 
     if (tcptransp != NULL) {
@@ -679,6 +753,12 @@ static void register_nfs_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 	    fprintf(stderr, "%s\n",
 		    "unable to register (NFS3_PROGRAM, NFS_V3, tcp).");
 	    daemon_exit(0);
+	}
+
+	if (opt_portmapper && !opt_ipv4only) {
+	    /* Register NFS service for TCP6 */
+	    register_service(tcptransp, NFS3_PROGRAM, NFS_V3, nfs3_program_3,
+		"tcp6", "(NFS3_PROGRAM, NFS_V3, tcp6)");
 	}
     }
 }
@@ -708,6 +788,16 @@ static void register_mount_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 		    "unable to register (MOUNTPROG, MOUNTVERS3, udp).");
 	    daemon_exit(0);
 	}
+
+	if (opt_portmapper && !opt_ipv4only) {
+	    /* Register MOUNT service (v1) for UDP6 */
+	    register_service(udptransp, MOUNTPROG, MOUNTVERS1, mountprog_3,
+		"udp6", "(MOUNTPROG, MOUNTVERS1, udp6)");
+
+	    /* Register MOUNT service (v3) for UDP6 */
+	    register_service(udptransp, MOUNTPROG, MOUNTVERS3, mountprog_3,
+		"udp6", "(MOUNTPROG, MOUNTVERS3, udp6)");
+	}
     }
 
     if (tcptransp != NULL) {
@@ -728,28 +818,89 @@ static void register_mount_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 		    "unable to register (MOUNTPROG, MOUNTVERS3, tcp).");
 	    daemon_exit(0);
 	}
+
+	if (opt_portmapper && !opt_ipv4only) {
+	    /* Register MOUNT service (v1) for TCP */
+	    register_service(tcptransp, MOUNTPROG, MOUNTVERS1, mountprog_3,
+		"tcp6", "(MOUNTPROG, MOUNTVERS1, tcp6)");
+
+	    /* Register MOUNT service (v3) for TCP */
+	    register_service(tcptransp, MOUNTPROG, MOUNTVERS3, mountprog_3,
+		"tcp6", "(MOUNTPROG, MOUNTVERS3, tcp6)");
+	}
     }
 }
 
 static SVCXPRT *create_udp_transport(unsigned int port)
 {
     SVCXPRT *transp = NULL;
-    struct sockaddr_in sin;
+    const struct sockaddr *sin;
+    size_t sin_len;
+    struct sockaddr_in sin4;
+    struct sockaddr_in6 sin6;
     int sock;
     const int on = 1;
 
-    /* Make sure we null the entire sockaddr_in structure */
-    memset(&sin, 0, sizeof(struct sockaddr_in));
+    if (port == 0) {
+	if (opt_ipv4only) {
+	    sock = RPC_ANYSOCK;
+	} else {
+	    sock = socket(PF_INET6, SOCK_DGRAM, 0);
+	    if (sock == -1) {
+		perror("socket");
+		fprintf(stderr, "Couldn't create a listening udp socket\n");
+		exit(1);
+	    }
+	}
+    } else {
+	if (!opt_ipv4only) {
+	    /* Make sure we null the entire sockaddr_in6 structure */
+	    memset(&sin6, 0, sizeof(struct sockaddr_in6));
 
-    if (port == 0)
-	sock = RPC_ANYSOCK;
-    else {
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
-	sin.sin_addr.s_addr = opt_bind_addr.s_addr;
-	sock = socket(PF_INET, SOCK_DGRAM, 0);
+	    sin6.sin6_family = AF_INET6;
+	    sin6.sin6_port = htons(port);
+	    sin6.sin6_addr = opt_bind_addr;
+
+	    sin = (const struct sockaddr*)&sin6;
+	    sin_len = sizeof(sin6);
+
+	    sock = socket(PF_INET6, SOCK_DGRAM, 0);
+	}
+
+	if (opt_ipv4only || \
+	    ((sock == -1) && (errno == EAFNOSUPPORT))) {
+	    if (!IN6_IS_ADDR_V4MAPPED(&opt_bind_addr) && \
+		!IN6_IS_ADDR_V4COMPAT(&opt_bind_addr) && \
+		!IN6_IS_ADDR_UNSPECIFIED(&opt_bind_addr)) {
+		char address_str[INET6_ADDRSTRLEN];
+
+		fprintf(stderr, "Couldn't translate address '%s' to IPv4\n",
+		    inet_ntop(AF_INET6, &opt_bind_addr,
+			address_str, sizeof(address_str)));
+		exit(1);
+	    }
+
+	    /* Make sure we null the entire sockaddr_in structure */
+	    memset(&sin4, 0, sizeof(struct sockaddr_in));
+
+	    sin4.sin_family = AF_INET;
+	    sin4.sin_port = htons(port);
+	    sin4.sin_addr.s_addr = ((uint32_t*)&opt_bind_addr)[3];
+
+	    sin = (const struct sockaddr*)&sin4;
+	    sin_len = sizeof(sin4);
+
+	    sock = socket(PF_INET, SOCK_DGRAM, 0);
+	}
+
+	if (sock == -1) {
+	    perror("socket");
+	    fprintf(stderr, "Couldn't create a listening udp socket\n");
+	    exit(1);
+	}
+
 	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on));
-	if (bind(sock, (struct sockaddr *) &sin, sizeof(struct sockaddr))) {
+	if (bind(sock, sin, sin_len)) {
 	    perror("bind");
 	    fprintf(stderr, "Couldn't bind to udp port %d\n", port);
 	    exit(1);
@@ -769,24 +920,80 @@ static SVCXPRT *create_udp_transport(unsigned int port)
 static SVCXPRT *create_tcp_transport(unsigned int port)
 {
     SVCXPRT *transp = NULL;
-    struct sockaddr_in sin;
+    const struct sockaddr *sin;
+    size_t sin_len;
+    struct sockaddr_in sin4;
+    struct sockaddr_in6 sin6;
     int sock;
     const int on = 1;
 
-    /* Make sure we null the entire sockaddr_in structure */
-    memset(&sin, 0, sizeof(struct sockaddr_in));
+    if (port == 0) {
+	if (opt_ipv4only) {
+	    sock = RPC_ANYSOCK;
+	} else {
+	    sock = socket(PF_INET6, SOCK_STREAM, 0);
+	    if (sock == -1) {
+		perror("socket");
+		fprintf(stderr, "Couldn't create a listening tcp socket\n");
+		exit(1);
+	    }
+	}
+    } else {
+	if (!opt_ipv4only) {
+	    /* Make sure we null the entire sockaddr_in6 structure */
+	    memset(&sin6, 0, sizeof(struct sockaddr_in6));
+	
+	    sin6.sin6_family = AF_INET6;
+	    sin6.sin6_port = htons(port);
+	    sin6.sin6_addr = opt_bind_addr;
 
-    if (port == 0)
-	sock = RPC_ANYSOCK;
-    else {
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
-	sin.sin_addr.s_addr = opt_bind_addr.s_addr;
-	sock = socket(PF_INET, SOCK_STREAM, 0);
+	    sin = (const struct sockaddr*)&sin6;
+	    sin_len = sizeof(sin6);
+
+	    sock = socket(PF_INET6, SOCK_STREAM, 0);
+	}
+
+	if (opt_ipv4only || \
+	    ((sock == -1) && (errno == EAFNOSUPPORT))) {
+	    if (!IN6_IS_ADDR_V4MAPPED(&opt_bind_addr) && \
+		!IN6_IS_ADDR_V4COMPAT(&opt_bind_addr) && \
+		!IN6_IS_ADDR_UNSPECIFIED(&opt_bind_addr)) {
+		char address_str[INET6_ADDRSTRLEN];
+
+		fprintf(stderr, "Couldn't translate address '%s' to IPv4\n",
+		    inet_ntop(AF_INET6, &opt_bind_addr,
+			address_str, sizeof(address_str)));
+		exit(1);
+	    }
+
+	    /* Make sure we null the entire sockaddr_in structure */
+	    memset(&sin4, 0, sizeof(struct sockaddr_in));
+
+	    sin4.sin_family = AF_INET;
+	    sin4.sin_port = htons(port);
+	    sin4.sin_addr.s_addr = ((uint32_t*)&opt_bind_addr)[3];
+
+	    sin = (const struct sockaddr*)&sin4;
+	    sin_len = sizeof(sin4);
+
+	    sock = socket(PF_INET, SOCK_STREAM, 0);
+	}
+
+	if (sock == -1) {
+	    perror("socket");
+	    fprintf(stderr, "Couldn't create a listening tcp socket\n");
+	    exit(1);
+	}
+
 	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on));
-	if (bind(sock, (struct sockaddr *) &sin, sizeof(struct sockaddr))) {
+	if (bind(sock, sin, sin_len)) {
 	    perror("bind");
 	    fprintf(stderr, "Couldn't bind to tcp port %d\n", port);
+	    exit(1);
+	}
+	if (listen(sock, SOMAXCONN)) {
+	    perror("listen");
+	    fprintf(stderr, "Couldn't listen on tcp socket\n");
 	    exit(1);
 	}
     }
@@ -805,7 +1012,7 @@ static SVCXPRT *create_tcp_transport(unsigned int port)
    allows us to handle other events as well. */
 static void unfs3_svc_run(void)
 {
-#ifdef HAVE_SVC_GETREQ_POLL
+#if defined(HAVE_SVC_GETREQ_POLL) && HAVE_DECL_SVC_POLLFD
     int r;
 #else
     fd_set readfds;
@@ -815,7 +1022,7 @@ static void unfs3_svc_run(void)
     for (;;) {
 	fd_cache_close_inactive();
 
-#ifdef HAVE_SVC_GETREQ_POLL
+#if defined(HAVE_SVC_GETREQ_POLL) && HAVE_DECL_SVC_POLLFD
 	r = poll(svc_pollfd, svc_max_pollfd, 2*1000);
 	if (r < 0) {
 		if (errno == EINTR) {
@@ -900,9 +1107,9 @@ int main(int argc, char **argv)
 #endif
 
     /* Clear opt_bind_addr structure before we use it */
-    memset(&opt_bind_addr, 0, sizeof(struct in_addr));
+    memset(&opt_bind_addr, 0, sizeof(opt_bind_addr));
 
-    opt_bind_addr.s_addr = INADDR_ANY;
+    opt_bind_addr = in6addr_any;
 
     parse_options(argc, argv);
     if (optind < argc) {

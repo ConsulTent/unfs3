@@ -56,7 +56,8 @@ static void add_mount(const char *path, struct svc_req *rqstp)
 {
     mountlist new;
     mountlist iter;
-    char *host;
+    char host[INET6_ADDRSTRLEN];
+	struct in6_addr remote_buf;
 
     new = malloc(sizeof(struct mountbody));
     if (!new) {
@@ -64,7 +65,7 @@ static void add_mount(const char *path, struct svc_req *rqstp)
 	return;
     }
 
-    host = inet_ntoa(get_remote(rqstp));
+    inet_ntop(AF_INET6, get_remote(rqstp, &remote_buf), host, sizeof(host));
     new->ml_hostname = malloc(strlen(host) + 1);
     if (!new->ml_hostname) {
 	logmsg(LOG_CRIT, "add_mount: Unable to allocate memory");
@@ -102,9 +103,10 @@ static void add_mount(const char *path, struct svc_req *rqstp)
 static void remove_mount(const char *path, struct svc_req *rqstp)
 {
     mountlist iter, next, prev = NULL;
-    char *host;
+    char host[INET6_ADDRSTRLEN];
+    struct in6_addr remote_buf;
 
-    host = inet_ntoa(get_remote(rqstp));
+    inet_ntop(AF_INET6, get_remote(rqstp, &remote_buf), host, sizeof(host));
 
     iter = mount_list;
     while (iter) {
@@ -150,6 +152,8 @@ mountres3 *mountproc_mnt_3_svc(dirpath * argp, struct svc_req * rqstp)
     static int auth = AUTH_UNIX;
     int authenticated = 0;
     char *password;
+    char host[INET6_ADDRSTRLEN];
+    struct in6_addr remote_buf;
 
     /* We need to modify the *argp pointer. Make a copy. */
     char *dpath = *argp;
@@ -158,7 +162,7 @@ mountres3 *mountproc_mnt_3_svc(dirpath * argp, struct svc_req * rqstp)
     if (rqstp->rq_vers != 3) {
 	logmsg(LOG_INFO,
 	       "%s attempted mount with unsupported protocol version",
-	       inet_ntoa(get_remote(rqstp)));
+	       inet_ntop(AF_INET6, get_remote(rqstp, &remote_buf), host, sizeof(host)));
 	result.fhs_status = MNT3ERR_INVAL;
 	return &result;
     }
@@ -216,7 +220,7 @@ mountres3 *mountproc_mnt_3_svc(dirpath * argp, struct svc_req * rqstp)
 
     if (strlen(buf) + 1 > NFS_MAXPATHLEN) {
 	logmsg(LOG_INFO, "%s attempted to mount jumbo path",
-	       inet_ntoa(get_remote(rqstp)));
+	       inet_ntop(AF_INET6, get_remote(rqstp, &remote_buf), host, sizeof(host)));
 	result.fhs_status = MNT3ERR_NAMETOOLONG;
 	return &result;
     }
@@ -236,7 +240,7 @@ mountres3 *mountproc_mnt_3_svc(dirpath * argp, struct svc_req * rqstp)
 
     if (!fh_valid(fh)) {
 	logmsg(LOG_INFO, "%s attempted to mount non-directory",
-	       inet_ntoa(get_remote(rqstp)));
+	       inet_ntop(AF_INET6, get_remote(rqstp, &remote_buf), host, sizeof(host)));
 	result.fhs_status = MNT3ERR_NOTDIR;
 	return &result;
     }
