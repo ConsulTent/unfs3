@@ -18,6 +18,7 @@
 #ifndef WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <syslog.h>
 #else				       /* WIN32 */
@@ -77,9 +78,12 @@ unsigned int opt_mount_port = NFS_PORT;
 int opt_singleuser = FALSE;
 int opt_brute_force = FALSE;
 int opt_testconfig = FALSE;
-struct in6_addr opt_bind_addr;
+int opt_tcp_nodelay = FALSE;
+struct in_addr opt_bind_addr;
 int opt_readable_executables = FALSE;
 char *opt_pid_file = NULL;
+int nfs_prog = NFS3_PROGRAM;
+int mount_prog = MOUNTPROG;
 
 /* Register with portmapper? */
 int opt_portmapper = TRUE;
@@ -179,7 +183,7 @@ int get_socket_type(struct svc_req *rqstp)
 /*
  * write current pid to a file
  */
-static void create_pid_file(void)
+static void create_pid_file(int pid)
 {
     char buf[16];
     int fd, res, len;
@@ -201,7 +205,7 @@ static void create_pid_file(void)
     }
 #endif
 
-    sprintf(buf, "%i\n", backend_getpid());
+    sprintf(buf, "%i\n", pid);
     len = strlen(buf);
 
     res = backend_pwrite(fd, buf, len, 0);
@@ -234,7 +238,7 @@ static void parse_options(int argc, char **argv)
 {
 
     int opt = 0;
-    char *optstring = "bcC:de:hl:m:n:prstTuwi:4";
+    char *optstring = "bcC:de:hl:m:Nn:prstTuwi:x:y:";
 
     while (opt != -1) {
 	opt = getopt(argc, argv, optstring);
@@ -290,7 +294,23 @@ static void parse_options(int argc, char **argv)
 		printf
 		    ("\t-r          report unreadable executables as readable\n");
 		printf("\t-T          test exports file and exit\n");
+		printf("\t-x <port>   alternate NFS RPC port\n");
+		printf("\t-y <port>   alternate MOUNTD RPC port\n");
 		exit(0);
+		break;
+	    case 'x':
+		nfs_prog = strtol(optarg, NULL, 10);
+		if (nfs_prog == 0) {
+		    fprintf(stderr, "Invalid NFS RPC port\n");
+		    exit(1);
+		}
+		break;
+	    case 'y':
+		mount_prog = strtol(optarg, NULL, 10);
+		if (mount_prog == 0) {
+		    fprintf(stderr, "Invalid MOUNTD RPC port\n");
+		    exit(1);
+		}
 		break;
 	    case 'l':
 		if (inet_pton(AF_INET6, optarg, &opt_bind_addr) != 1) {
@@ -313,6 +333,9 @@ static void parse_options(int argc, char **argv)
 		    fprintf(stderr, "Invalid port\n");
 		    exit(1);
 		}
+		break;
+	    case 'N':
+		opt_tcp_nodelay = TRUE;
 		break;
 	    case 'n':
 		opt_nfs_port = strtol(optarg, NULL, 10);
@@ -387,12 +410,12 @@ void daemon_exit(int error)
 #endif				       /* WIN32 */
 
     if (opt_portmapper) {
-	svc_unreg(MOUNTPROG, MOUNTVERS1);
-	svc_unreg(MOUNTPROG, MOUNTVERS3);
+	svc_unregister(mount_prog, MOUNTVERS1);
+	svc_unregister(mount_prog, MOUNTVERS3);
     }
 
     if (opt_portmapper) {
-	svc_unreg(NFS3_PROGRAM, NFS_V3);
+	svc_unregister(nfs_prog, NFS_V3);
     }
 
     if (error == SIGSEGV)
@@ -725,13 +748,13 @@ static void register_service(SVCXPRT *transp, rpcprog_t prog, rpcvers_t vers,
 static void register_nfs_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 {
     if (opt_portmapper) {
-	pmap_unset(NFS3_PROGRAM, NFS_V3);
+	pmap_unset(nfs_prog, NFS_V3);
     }
 
     if (udptransp != NULL) {
 	/* Register NFS service for UDP */
 	if (!svc_register
-	    (udptransp, NFS3_PROGRAM, NFS_V3, nfs3_program_3,
+	    (udptransp, nfs_prog, NFS_V3, nfs3_program_3,
 	     opt_portmapper ? IPPROTO_UDP : 0)) {
 	    fprintf(stderr, "%s\n",
 		    "unable to register (NFS3_PROGRAM, NFS_V3, udp).");
@@ -748,7 +771,7 @@ static void register_nfs_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
     if (tcptransp != NULL) {
 	/* Register NFS service for TCP */
 	if (!svc_register
-	    (tcptransp, NFS3_PROGRAM, NFS_V3, nfs3_program_3,
+	    (tcptransp, nfs_prog, NFS_V3, nfs3_program_3,
 	     opt_portmapper ? IPPROTO_TCP : 0)) {
 	    fprintf(stderr, "%s\n",
 		    "unable to register (NFS3_PROGRAM, NFS_V3, tcp).");
@@ -766,14 +789,14 @@ static void register_nfs_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 static void register_mount_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 {
     if (opt_portmapper) {
-	pmap_unset(MOUNTPROG, MOUNTVERS1);
-	pmap_unset(MOUNTPROG, MOUNTVERS3);
+	pmap_unset(mount_prog, MOUNTVERS1);
+	pmap_unset(mount_prog, MOUNTVERS3);
     }
 
     if (udptransp != NULL) {
 	/* Register MOUNT service (v1) for UDP */
 	if (!svc_register
-	    (udptransp, MOUNTPROG, MOUNTVERS1, mountprog_3,
+	    (udptransp, mount_prog, MOUNTVERS1, mountprog_3,
 	     opt_portmapper ? IPPROTO_UDP : 0)) {
 	    fprintf(stderr, "%s\n",
 		    "unable to register (MOUNTPROG, MOUNTVERS1, udp).");
@@ -782,7 +805,7 @@ static void register_mount_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 
 	/* Register MOUNT service (v3) for UDP */
 	if (!svc_register
-	    (udptransp, MOUNTPROG, MOUNTVERS3, mountprog_3,
+	    (udptransp, mount_prog, MOUNTVERS3, mountprog_3,
 	     opt_portmapper ? IPPROTO_UDP : 0)) {
 	    fprintf(stderr, "%s\n",
 		    "unable to register (MOUNTPROG, MOUNTVERS3, udp).");
@@ -803,7 +826,7 @@ static void register_mount_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
     if (tcptransp != NULL) {
 	/* Register MOUNT service (v1) for TCP */
 	if (!svc_register
-	    (tcptransp, MOUNTPROG, MOUNTVERS1, mountprog_3,
+	    (tcptransp, mount_prog, MOUNTVERS1, mountprog_3,
 	     opt_portmapper ? IPPROTO_TCP : 0)) {
 	    fprintf(stderr, "%s\n",
 		    "unable to register (MOUNTPROG, MOUNTVERS1, tcp).");
@@ -812,7 +835,7 @@ static void register_mount_service(SVCXPRT * udptransp, SVCXPRT * tcptransp)
 
 	/* Register MOUNT service (v3) for TCP */
 	if (!svc_register
-	    (tcptransp, MOUNTPROG, MOUNTVERS3, mountprog_3,
+	    (tcptransp, mount_prog, MOUNTVERS3, mountprog_3,
 	     opt_portmapper ? IPPROTO_TCP : 0)) {
 	    fprintf(stderr, "%s\n",
 		    "unable to register (MOUNTPROG, MOUNTVERS3, tcp).");
@@ -986,7 +1009,9 @@ static SVCXPRT *create_tcp_transport(unsigned int port)
 	}
 
 	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on));
-	if (bind(sock, sin, sin_len)) {
+	if (opt_tcp_nodelay)
+	    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+	if (bind(sock, (struct sockaddr *) &sin, sizeof(struct sockaddr))) {
 	    perror("bind");
 	    fprintf(stderr, "Couldn't bind to tcp port %d\n", port);
 	    exit(1);
@@ -1166,6 +1191,10 @@ int main(int argc, char **argv)
 	    fprintf(stderr, "could not fork into background\n");
 	    daemon_exit(0);
 	}
+	if (pid)
+	    create_pid_file(pid);
+    } else {
+	create_pid_file(backend_getpid());
     }
 #endif				       /* WIN32 */
 
@@ -1188,7 +1217,8 @@ int main(int argc, char **argv)
 	sigaction(SIGALRM, &act, NULL);
 
 	/* don't make directory we started in busy */
-	chdir("/");
+	if(chdir("/") < 0)
+	    daemon_exit(0);
 
 	/* detach from terminal */
 	if (opt_detach) {
@@ -1202,8 +1232,10 @@ int main(int argc, char **argv)
 	/* no umask to not screw up create modes */
 	umask(0);
 
+#ifdef WIN32
 	/* create pid file if wanted */
-	create_pid_file();
+	create_pid_file(backend_getpid());
+#endif
 
 	/* initialize internal stuff */
 	fh_cache_init();

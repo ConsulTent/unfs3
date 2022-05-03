@@ -161,8 +161,8 @@ mountres3 *mountproc_mnt_3_svc(dirpath * argp, struct svc_req * rqstp)
     /* error out if not version 3 */
     if (rqstp->rq_vers != 3) {
 	logmsg(LOG_INFO,
-	       "%s attempted mount with unsupported protocol version",
-	       inet_ntop(AF_INET6, get_remote(rqstp, &remote_buf), host, sizeof(host)));
+	       "%s attempted mount with unsupported protocol version: %i",
+	       inet_ntoa(get_remote(rqstp)), rqstp->rq_vers);
 	result.fhs_status = MNT3ERR_INVAL;
 	return &result;
     }
