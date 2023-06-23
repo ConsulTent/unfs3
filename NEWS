@@ -1,4 +1,4 @@
-What's new or changed in 0.9.23
+What's new or changed in 0.10.0
 ===============================
 
 Daniel Richard G. provided a large patch to allow better
@@ -17,11 +17,21 @@ than 4GB from Windows.
 ChangeLog
 =========
 
+Version 0.10.0
+
+  - switched to libtirpc as a base requirement
+  - contrib scripts now require Python 3 instead of Python 2
+  - fix stale handle when moving files or directories
+
 Version 0.9.23
 
   - include AFS support for better serving of files from AFS filesystems
   - use svc_getreq_poll() when available
   - fix serving files larger than 4GB from Windows
+  - better support for 64-bit systems
+  - fixes for macOS and Windows support
+  - fixes when cross compiling
+  - better support for exporting FAT filesystems
 
 Version 0.9.22
 

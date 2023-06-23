@@ -1,5 +1,5 @@
 CC = @CC@
-CFLAGS = @CFLAGS@ @AFS_INCLUDES@ -D_GNU_SOURCE -I.
+CFLAGS = @CFLAGS@ @AFS_INCLUDES@ @TIRPC_CFLAGS@ -D_GNU_SOURCE -I.
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 VERSION = @PACKAGE_VERSION@
@@ -12,7 +12,7 @@ OBJS = afsgettimes.o afssupport.o attr.o daemon.o error.o fd_cache.o fh.o fh_cac
        md5.o mount.o nfs.o password.o readdir.o user.o xdr.o winsupport.o
 CONFOBJ = Config/lib.a
 EXTRAOBJ = @EXTRAOBJ@
-LDFLAGS = @LDFLAGS@ @LIBS@ @LEXLIB@ @AFS_LIBS@
+LDFLAGS = @LDFLAGS@ @LIBS@ @LEXLIB@ @AFS_LIBS@ @TIRPC_LIBS@
 EXEEXT = @EXEEXT@
 
 srcdir = @srcdir@
@@ -29,15 +29,20 @@ DESTDIR =
 
 VPATH = $(srcdir)
 
-all: subdirs unfsd$(EXEEXT)
+.PHONY: FORCE
+
+all: unfsd$(EXEEXT)
 
 unfsd$(EXEEXT): $(OBJS) $(CONFOBJ) $(EXTRAOBJ)
 	$(CC) -o $@ $(OBJS) $(CONFOBJ) $(EXTRAOBJ) $(LDFLAGS)
 
-subdirs:
-	for i in $(SUBDIRS); do (cd $$i && $(MAKE) all) || exit; done
+$(CONFOBJ): FORCE
+	$(MAKE) -C $(@D)
 
-install: unfsd$(EXEEXT)
+$(EXTRAOBJ): FORCE
+	$(MAKE) -C $(@D)
+
+install:
 	$(INSTALL) -d $(DESTDIR)$(sbindir)
 	$(INSTALL) -d $(DESTDIR)$(mandir)/man7
 	$(INSTALL) -d $(DESTDIR)$(mandir)/man8
@@ -46,7 +51,7 @@ install: unfsd$(EXEEXT)
 	$(INSTALL_DATA) $(srcdir)/unfsd.8       $(DESTDIR)$(mandir)/man8/unfsd.8
 
 # Not installed by default, since it installs files outside prefix
-install-init: unfsd.init
+install-init:
 	$(INSTALL) -d $(DESTDIR)/etc/init.d
 	$(INSTALL) $(srcdir)/unfsd.init $(DESTDIR)/etc/init.d/unfsd
 
@@ -85,81 +90,87 @@ unfs3-$(VERSION).tar.gz:
 	rm -rf unfs3-$(VERSION)
 	ln -sf `cd $(srcdir) && /bin/pwd` unfs3-$(VERSION)
 
+	# Get a rough first draft with:
+	#
+	#   git ls-tree -r HEAD --name-only | sed 's@^.*$@  unfs3-$(VERSION)/\0 \\@'"
+	#
+	#
 	tar zcf unfs3-$(VERSION).tar.gz \
-	 unfs3-$(VERSION)/fd_cache.c \
-	 unfs3-$(VERSION)/md5.h \
-	 unfs3-$(VERSION)/xdr.h \
-	 unfs3-$(VERSION)/attr.c \
-	 unfs3-$(VERSION)/README \
-	 unfs3-$(VERSION)/backend.h \
-	 unfs3-$(VERSION)/password.c \
-	 unfs3-$(VERSION)/README.nfsroot \
-	 unfs3-$(VERSION)/error.c \
-	 unfs3-$(VERSION)/winsupport.c \
-	 unfs3-$(VERSION)/fh_cache.h \
-	 unfs3-$(VERSION)/user.c \
-	 unfs3-$(VERSION)/unfs3.spec \
-	 unfs3-$(VERSION)/winsupport.h \
-	 unfs3-$(VERSION)/winerrno.h \
-	 unfs3-$(VERSION)/readdir.h \
-	 unfs3-$(VERSION)/nfs.c \
-	 unfs3-$(VERSION)/configure \
-	 unfs3-$(VERSION)/xdr.c \
-	 unfs3-$(VERSION)/install-sh \
-	 unfs3-$(VERSION)/mount.c \
-	 unfs3-$(VERSION)/password.h \
+	 unfs3-$(VERSION)/BRANCHES \
+	 unfs3-$(VERSION)/CREDITS \
+	 unfs3-$(VERSION)/Config/Makefile.in \
+	 unfs3-$(VERSION)/Config/exports.h \
+	 unfs3-$(VERSION)/Config/exports.l \
+	 unfs3-$(VERSION)/Config/exports.y \
 	 unfs3-$(VERSION)/Extras/Makefile.in \
 	 unfs3-$(VERSION)/Extras/cluster.c \
-	 unfs3-$(VERSION)/Extras/tags.7 \
 	 unfs3-$(VERSION)/Extras/cluster.h \
-	 unfs3-$(VERSION)/NEWS \
-	 unfs3-$(VERSION)/CREDITS \
-	 unfs3-$(VERSION)/aclocal.m4 \
-	 unfs3-$(VERSION)/daemon.h \
-	 unfs3-$(VERSION)/doc/TODO \
-	 unfs3-$(VERSION)/doc/README.win \
-	 unfs3-$(VERSION)/doc/kirch1.txt \
-	 unfs3-$(VERSION)/doc/passwords.txt \
-	 unfs3-$(VERSION)/unfsd.8 \
+	 unfs3-$(VERSION)/Extras/tags.7 \
+	 unfs3-$(VERSION)/LICENSE \
 	 unfs3-$(VERSION)/Makefile.in \
-	 unfs3-$(VERSION)/unfsd.init \
-	 unfs3-$(VERSION)/backend_win32.h \
-	 unfs3-$(VERSION)/indent-all \
+	 unfs3-$(VERSION)/NEWS \
+	 unfs3-$(VERSION)/README.md \
+	 unfs3-$(VERSION)/README.nfsroot \
+	 unfs3-$(VERSION)/aclocal.m4 \
+	 unfs3-$(VERSION)/afsgettimes.c \
+	 unfs3-$(VERSION)/afssupport.c \
+	 unfs3-$(VERSION)/afssupport.h \
+	 unfs3-$(VERSION)/attr.c \
+	 unfs3-$(VERSION)/attr.h \
+	 unfs3-$(VERSION)/backend.h \
 	 unfs3-$(VERSION)/backend_unix.h \
-	 unfs3-$(VERSION)/nfs.h \
-	 unfs3-$(VERSION)/locate.c \
-	 unfs3-$(VERSION)/BRANCHES \
-	 unfs3-$(VERSION)/fd_cache.h \
-	 unfs3-$(VERSION)/daemon.c \
-	 unfs3-$(VERSION)/error.h \
+	 unfs3-$(VERSION)/backend_win32.h \
+	 unfs3-$(VERSION)/bootstrap \
+	 unfs3-$(VERSION)/config.h.in \
+	 unfs3-$(VERSION)/configure \
+	 unfs3-$(VERSION)/configure.ac \
 	 unfs3-$(VERSION)/contrib/nfsotpclient/README \
-	 unfs3-$(VERSION)/contrib/nfsotpclient/mountclient \
 	 unfs3-$(VERSION)/contrib/nfsotpclient/mountclient/__init__.py \
-	 unfs3-$(VERSION)/contrib/nfsotpclient/mountclient/mountpacker.py \
 	 unfs3-$(VERSION)/contrib/nfsotpclient/mountclient/mountconstants.py \
+	 unfs3-$(VERSION)/contrib/nfsotpclient/mountclient/mountpacker.py \
 	 unfs3-$(VERSION)/contrib/nfsotpclient/mountclient/mounttypes.py \
 	 unfs3-$(VERSION)/contrib/nfsotpclient/nfsotpclient.py \
 	 unfs3-$(VERSION)/contrib/nfsotpclient/rpc.py \
 	 unfs3-$(VERSION)/contrib/rpcproxy/rpcproxy \
-	 unfs3-$(VERSION)/LICENSE \
-	 unfs3-$(VERSION)/fh.h \
+	 unfs3-$(VERSION)/daemon.c \
+	 unfs3-$(VERSION)/daemon.h \
+	 unfs3-$(VERSION)/doc/README.win \
+	 unfs3-$(VERSION)/doc/TODO \
+	 unfs3-$(VERSION)/doc/kirch1.txt \
+	 unfs3-$(VERSION)/doc/passwords.txt \
+	 unfs3-$(VERSION)/error.c \
+	 unfs3-$(VERSION)/error.h \
+	 unfs3-$(VERSION)/fd_cache.c \
+	 unfs3-$(VERSION)/fd_cache.h \
 	 unfs3-$(VERSION)/fh.c \
-	 unfs3-$(VERSION)/Config/exports.y \
-	 unfs3-$(VERSION)/Config/exports.l \
-	 unfs3-$(VERSION)/Config/exports.h \
-	 unfs3-$(VERSION)/Config/Makefile.in \
-	 unfs3-$(VERSION)/locate.h \
-	 unfs3-$(VERSION)/md5.c \
+	 unfs3-$(VERSION)/fh.h \
 	 unfs3-$(VERSION)/fh_cache.c \
-	 unfs3-$(VERSION)/config.h.in \
-	 unfs3-$(VERSION)/attr.h \
-	 unfs3-$(VERSION)/configure.ac \
+	 unfs3-$(VERSION)/fh_cache.h \
+	 unfs3-$(VERSION)/indent-all \
+	 unfs3-$(VERSION)/install-sh \
+	 unfs3-$(VERSION)/locate.c \
+	 unfs3-$(VERSION)/locate.h \
+	 unfs3-$(VERSION)/m4/unfs3-compile-warnings.m4 \
+	 unfs3-$(VERSION)/md5.c \
+	 unfs3-$(VERSION)/md5.h \
+	 unfs3-$(VERSION)/mount.c \
 	 unfs3-$(VERSION)/mount.h \
+	 unfs3-$(VERSION)/nfs.c \
+	 unfs3-$(VERSION)/nfs.h \
+	 unfs3-$(VERSION)/password.c \
+	 unfs3-$(VERSION)/password.h \
 	 unfs3-$(VERSION)/readdir.c \
+	 unfs3-$(VERSION)/readdir.h \
+	 unfs3-$(VERSION)/unfs3.spec \
+	 unfs3-$(VERSION)/unfsd.8 \
+	 unfs3-$(VERSION)/unfsd.init \
+	 unfs3-$(VERSION)/user.c \
 	 unfs3-$(VERSION)/user.h \
-	 unfs3-$(VERSION)/afsgettimes.c \
-	 unfs3-$(VERSION)/afssupport.h \
-	 unfs3-$(VERSION)/afssupport.c
+	 unfs3-$(VERSION)/winerrno.h \
+	 unfs3-$(VERSION)/winsupport.c \
+	 unfs3-$(VERSION)/winsupport.h \
+	 unfs3-$(VERSION)/xdr.c \
+	 unfs3-$(VERSION)/xdr.h
 
 	rm -f unfs3-$(VERSION)
 
